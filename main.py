@@ -49,7 +49,8 @@ SPECIES_TO_GENUS = {
 
 
 transform = transforms.Compose([
-    transforms.Resize((224, 224)),
+    transforms.Resize((256, 256)),
+    transforms.CenterCrop(224),
     transforms.ToTensor(),
     transforms.Normalize(
         mean=[0.485, 0.456, 0.406],
@@ -73,8 +74,9 @@ def build_taxonomy(species: str) -> Dict[str, str]:
 def confidence_level(confidence: float) -> str:
     if confidence >= 0.80:
         return "high"
-    if confidence >= 0.50:
+    if confidence >= 0.45:
         return "low"
+    # ต่ำกว่า 0.45 = โมเดลไม่มั่นใจว่าเป็นปีก Culicoides → ไม่แสดงผลจำแนก
     return "ood"
 
 
@@ -262,11 +264,11 @@ def get_target_layer(active_model: nn.Module, model_name: str):
     model_name = normalize_model_name(model_name)
 
     if model_name == "efficientnet_b0":
-        return active_model.features[-3]
+        return active_model.features[-1]
     if model_name == "resnet50":
         return active_model.layer4[-1]
     if model_name == "densenet121":
-        return active_model.features.denseblock4
+        return active_model.features.norm5
 
     raise ValueError(f"Unsupported model for Grad-CAM: {model_name}")
 
@@ -281,12 +283,9 @@ def capture_activations_and_gradients(image: Image.Image, active_model: nn.Modul
 
     def forward_hook(module, inp, out):
         activations.append(out.detach())
-
-    def backward_hook(module, grad_input, grad_output):
-        gradients.append(grad_output[0].detach())
+        out.register_hook(lambda grad: gradients.append(grad.detach()))
 
     fh = target_layer.register_forward_hook(forward_hook)
-    bh = target_layer.register_full_backward_hook(backward_hook)
 
     x = pil_to_input_tensor(image)
     logits = active_model(x)
@@ -296,7 +295,6 @@ def capture_activations_and_gradients(image: Image.Image, active_model: nn.Modul
     logits[0, class_idx].backward()
 
     fh.remove()
-    bh.remove()
 
     if not activations or not gradients:
         raise RuntimeError("Grad-CAM hooks failed.")
@@ -351,7 +349,9 @@ def cam_to_overlay_base64(cam: torch.Tensor, image: Image.Image) -> str:
     """Grad-CAM++ overlay — heatmap blended on top of the original image."""
     cam_np = normalize_cam(cam)
 
-    original = image.resize((224, 224))
+    original = transforms.functional.center_crop(
+        transforms.functional.resize(image, (256, 256)), 224
+    )
     original_np = np.array(original).astype(np.float32) / 255.0
 
     fig, ax = plt.subplots()
