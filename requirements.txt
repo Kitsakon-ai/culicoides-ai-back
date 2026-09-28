@@ -3,6 +3,7 @@ uvicorn
 python-multipart
 pillow
 numpy
+scipy
 torch
 torchvision
 matplotlib
